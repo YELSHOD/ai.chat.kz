@@ -1,9 +1,6 @@
 package com.yelshod.ai.chat.kz.chat;
 
-import com.yelshod.ai.chat.kz.chat.dto.ChatResponse;
-import com.yelshod.ai.chat.kz.chat.dto.CreateChatRequest;
-import com.yelshod.ai.chat.kz.chat.dto.CreateMessageRequest;
-import com.yelshod.ai.chat.kz.chat.dto.MessageResponse;
+import com.yelshod.ai.chat.kz.chat.dto.*;
 import com.yelshod.ai.chat.kz.common.ApiException;
 import com.yelshod.ai.chat.kz.user.AppUser;
 import com.yelshod.ai.chat.kz.user.AppUserRepository;
@@ -12,8 +9,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class ChatService {
@@ -85,6 +87,55 @@ public class ChatService {
         return chatMessageRepository.findAllByChatOrderByCreatedAtAsc(chat)
                 .stream()
                 .map(this::toMessageResponse)
+                .toList();
+    }
+
+    @Transactional
+    public DeleteChatResponse deleteChat(Long userId, UUID chatPublicId) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+        chatMessageRepository.deleteAll(chatMessageRepository.findAllByChatOrderByCreatedAtAsc(chat));
+        chatRepository.delete(chat);
+        return new DeleteChatResponse(chatPublicId, true);
+    }
+
+    @Transactional
+    public ChatResponse renameChat(Long userId, UUID chatPublicId, RenameChatRequest request) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+        chat.setTitle(request.title().trim());
+        chat.setUpdatedAt(Instant.now());
+        Chat saved = chatRepository.save(chat);
+        return toChatResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DayMessagesResponse> listMessagesByDay(
+            Long userId,
+            UUID chatPublicId,
+            LocalDate from,
+            LocalDate to,
+            ZoneId zoneId
+    ) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+
+        Instant start = from.atStartOfDay(zoneId).toInstant();
+        Instant end = to.plusDays(1).atStartOfDay(zoneId).toInstant();
+
+        List<ChatMessage> messages = chatMessageRepository
+                .findAllByChatAndCreatedAtBetweenOrderByCreatedAtAsc(chat, start, end);
+
+        Map<LocalDate, List<MessageResponse>> grouped = messages.stream()
+                .map(this::toMessageResponse)
+                .collect(Collectors.groupingBy(
+                        msg -> msg.createdAt().atZone(zoneId).toLocalDate(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        return grouped.entrySet().stream()
+                .map(e -> new DayMessagesResponse(e.getKey(), e.getValue()))
                 .toList();
     }
 

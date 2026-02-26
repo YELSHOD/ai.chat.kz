@@ -1,19 +1,13 @@
 package com.yelshod.ai.chat.kz.chat;
 
 import com.yelshod.ai.chat.kz.auth.AppPrincipal;
-import com.yelshod.ai.chat.kz.chat.dto.ChatResponse;
-import com.yelshod.ai.chat.kz.chat.dto.CreateChatRequest;
-import com.yelshod.ai.chat.kz.chat.dto.CreateMessageRequest;
-import com.yelshod.ai.chat.kz.chat.dto.MessageResponse;
+import com.yelshod.ai.chat.kz.chat.dto.*;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -50,5 +44,29 @@ public class ChatController {
     public List<MessageResponse> listMessages(@AuthenticationPrincipal AppPrincipal principal,
                                               @PathVariable UUID chatId) {
         return chatService.listMessages(principal.userId(), chatId);
+    }
+
+    @DeleteMapping("/{chatId}")
+    public DeleteChatResponse deleteChat(@AuthenticationPrincipal AppPrincipal principal,
+                                         @PathVariable UUID chatId) {
+        return chatService.deleteChat(principal.userId(), chatId);
+    }
+
+    @PatchMapping("/{chatId}")
+    public ChatResponse renameChat(@AuthenticationPrincipal AppPrincipal principal,
+                                   @PathVariable UUID chatId,
+                                   @Valid @RequestBody RenameChatRequest request) {
+        return chatService.renameChat(principal.userId(), chatId, request);
+    }
+
+    @GetMapping("/{chatId}/messages/by-day")
+    public List<DayMessagesResponse> listMessagesByDay(
+            @AuthenticationPrincipal AppPrincipal principal,
+            @PathVariable UUID chatId,
+            @RequestParam LocalDate from,
+            @RequestParam LocalDate to,
+            @RequestParam(defaultValue = "UTC") String tz
+    ) {
+        return chatService.listMessagesByDay(principal.userId(), chatId, from, to, ZoneId.of(tz));
     }
 }
