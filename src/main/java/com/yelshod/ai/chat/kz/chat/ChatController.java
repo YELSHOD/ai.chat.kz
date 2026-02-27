@@ -65,7 +65,7 @@ public class ChatController {
             @PathVariable UUID chatId,
             @RequestParam LocalDate from,
             @RequestParam LocalDate to,
-            @RequestParam(defaultValue = "UTC") String tz
+            @RequestParam(defaultValue = "Asia/Almaty") String tz
     ) {
         return chatService.listMessagesByDay(principal.userId(), chatId, from, to, ZoneId.of(tz));
     }
