@@ -9,5 +9,6 @@ import java.util.UUID;
 
 public interface ProjectRepository extends JpaRepository<Project, Long> {
     List<Project> findAllByOwnerOrderByUpdatedAtDesc(AppUser owner);
-    Optional<Project> findByPublicIdAndOwner(UUID publicId);
+
+    Optional<Project> findByPublicIdAndOwner(UUID publicId, AppUser user);
 }

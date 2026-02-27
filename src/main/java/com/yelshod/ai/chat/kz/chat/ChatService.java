@@ -2,6 +2,8 @@ package com.yelshod.ai.chat.kz.chat;
 
 import com.yelshod.ai.chat.kz.chat.dto.*;
 import com.yelshod.ai.chat.kz.common.ApiException;
+import com.yelshod.ai.chat.kz.project.Project;
+import com.yelshod.ai.chat.kz.project.ProjectRepository;
 import com.yelshod.ai.chat.kz.user.AppUser;
 import com.yelshod.ai.chat.kz.user.AppUserRepository;
 import org.springframework.http.HttpStatus;
@@ -23,13 +25,16 @@ public class ChatService {
     private final AppUserRepository appUserRepository;
     private final ChatRepository chatRepository;
     private final ChatMessageRepository chatMessageRepository;
+    private final ProjectRepository projectRepository;
 
     public ChatService(AppUserRepository appUserRepository,
                        ChatRepository chatRepository,
-                       ChatMessageRepository chatMessageRepository) {
+                       ChatMessageRepository chatMessageRepository,
+                       ProjectRepository projectRepository) {
         this.appUserRepository = appUserRepository;
         this.chatRepository = chatRepository;
         this.chatMessageRepository = chatMessageRepository;
+        this.projectRepository = projectRepository;
     }
 
     @Transactional
@@ -39,6 +44,28 @@ public class ChatService {
         Chat chat = new Chat();
         chat.setPublicId(UUID.randomUUID());
         chat.setUser(user);
+
+        String rawTitle = request.title() == null ? "" : request.title().trim();
+        chat.setTitle(rawTitle.isEmpty() ? "New chat" : rawTitle);
+
+        Instant now = Instant.now();
+        chat.setCreatedAt(now);
+        chat.setUpdatedAt(now);
+
+        Chat saved = chatRepository.save(chat);
+        return toChatResponse(saved);
+    }
+
+    @Transactional
+    public ChatResponse createChatInProject(Long userId, UUID projectPublicId, CreateChatRequest request) {
+        AppUser user = findUser(userId);
+        Project project = projectRepository.findByPublicIdAndOwner(projectPublicId, user)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Project not found"));
+
+        Chat chat = new Chat();
+        chat.setPublicId(UUID.randomUUID());
+        chat.setUser(user);
+        chat.setProject(project);
 
         String rawTitle = request.title() == null ? "" : request.title().trim();
         chat.setTitle(rawTitle.isEmpty() ? "New chat" : rawTitle);
@@ -137,6 +164,43 @@ public class ChatService {
         return grouped.entrySet().stream()
                 .map(e -> new DayMessagesResponse(e.getKey(), e.getValue()))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChatResponse> listChatsByProject(Long userId, UUID projectPublicId) {
+        AppUser user = findUser(userId);
+        Project project = projectRepository.findByPublicIdAndOwner(projectPublicId, user)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Project not found"));
+
+        return chatRepository.findAllByProjectOrderByUpdatedAtDesc(project)
+                .stream()
+                .map(this::toChatResponse)
+                .toList();
+    }
+
+    @Transactional
+    public ChatResponse removeChatFromProject(Long userId, UUID chatPublicId) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat( user, chatPublicId);
+
+        chat.setProject(null);
+        chat.setUpdatedAt(Instant.now());
+        Chat saved = chatRepository.save(chat);
+        return toChatResponse(saved);
+    }
+
+    @Transactional
+    public ChatResponse moveChatToProject(Long userId, UUID chatPublicId, UUID projectPublicId) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+
+        Project project = projectRepository.findByPublicIdAndOwner(projectPublicId, user)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Project not found"));
+
+        chat.setProject(project);
+        chat.setUpdatedAt(Instant.now());
+        Chat saved = chatRepository.save(chat);
+        return toChatResponse(saved);
     }
 
     private AppUser findUser(Long userId) {

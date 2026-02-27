@@ -1,5 +1,6 @@
 package com.yelshod.ai.chat.kz.chat;
 
+import com.yelshod.ai.chat.kz.project.Project;
 import com.yelshod.ai.chat.kz.user.AppUser;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -28,6 +29,10 @@ public class Chat {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
     private AppUser user;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "project_id")
+    private Project project;
 
     @Column(nullable = false)
     private String title;
@@ -59,6 +64,14 @@ public class Chat {
 
     public void setUser(AppUser user) {
         this.user = user;
+    }
+
+    public Project getProject() {
+        return project;
+    }
+
+    public void setProject(Project project) {
+        this.project = project;
     }
 
     public String getTitle() {

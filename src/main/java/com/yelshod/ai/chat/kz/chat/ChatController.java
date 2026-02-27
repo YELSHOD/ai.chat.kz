@@ -69,4 +69,17 @@ public class ChatController {
     ) {
         return chatService.listMessagesByDay(principal.userId(), chatId, from, to, ZoneId.of(tz));
     }
+
+    @PatchMapping("/{chatId}/project")
+    public ChatResponse moveChatToProject(@AuthenticationPrincipal AppPrincipal principal,
+                                          @PathVariable UUID chatId,
+                                          @Valid @RequestBody MoveChatRequest request) {
+        return chatService.moveChatToProject(principal.userId(), chatId, request.projectId());
+    }
+
+    @DeleteMapping("/{chatId}/project")
+    public ChatResponse removeChatFromProject(@AuthenticationPrincipal AppPrincipal principal,
+                                              @PathVariable UUID chatId){
+        return chatService.removeChatFromProject(principal.userId(), chatId);
+    }
 }
