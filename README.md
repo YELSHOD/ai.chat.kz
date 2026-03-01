@@ -8,6 +8,7 @@ Backend API for chats and projects built with Spring Boot.
 - Bearer-token authentication.
 - CRUD operations for chats and messages.
 - Chat grouping by projects.
+- AI reply generation with Gemini API (sync + SSE stream).
 
 ## Tech Stack
 
@@ -27,21 +28,46 @@ Backend API for chats and projects built with Spring Boot.
 
 File: `src/main/resources/application.properties`
 
-Current settings:
-
 ```properties
 spring.application.name=ai.chat.kz
 
-spring.datasource.url=jdbc:postgresql://localhost:5432/ai.chat.kz
-spring.datasource.username=
-spring.datasource.password=
+spring.datasource.url=${DB_URL:jdbc:postgresql://localhost:5432/ai.chat.kz}
+spring.datasource.username=${DB_USER:postgres}
+spring.datasource.password=${DB_PASSWORD:123}
 spring.jpa.hibernate.ddl-auto=update
+
+ai.gemini.api-key=${GEMINI_API_KEY:}
+ai.gemini.model=${GEMINI_MODEL:gemini-2.0-flash}
+ai.gemini.temperature=${GEMINI_TEMPERATURE:0.7}
+ai.context.max-messages=${AI_CONTEXT_MAX_MESSAGES:30}
+ai.context.max-chars=${AI_CONTEXT_MAX_CHARS:12000}
 ```
 
 Before running the app, create the database in PostgreSQL:
 
 ```sql
 CREATE DATABASE "ai.chat.kz";
+```
+
+## Environment Variables
+
+- `DB_URL`
+- `DB_USER`
+- `DB_PASSWORD`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL` (optional)
+- `GEMINI_TEMPERATURE` (optional)
+- `AI_CONTEXT_MAX_MESSAGES` (optional)
+- `AI_CONTEXT_MAX_CHARS` (optional)
+
+PowerShell example:
+
+```powershell
+$env:DB_URL="jdbc:postgresql://localhost:5432/ai.chat.kz"
+$env:DB_USER="postgres"
+$env:DB_PASSWORD="123"
+$env:GEMINI_API_KEY="YOUR_GEMINI_KEY"
+$env:GEMINI_MODEL="gemini-2.0-flash"
 ```
 
 ## Run
@@ -88,27 +114,19 @@ Token is issued on `register/login` and is valid for 30 days.
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 
-Register payload example:
-
-```json
-{
-  "email": "user@example.com",
-  "password": "secret123",
-  "username": "yelshod"
-}
-```
-
 ### Chats
 
-- `POST /api/chats` - create chat
-- `GET /api/chats` - list chats
-- `PATCH /api/chats/{chatId}` - rename chat
-- `DELETE /api/chats/{chatId}` - delete chat
-- `POST /api/chats/{chatId}/messages` - add message
-- `GET /api/chats/{chatId}/messages` - list messages
+- `POST /api/chats`
+- `GET /api/chats`
+- `PATCH /api/chats/{chatId}`
+- `DELETE /api/chats/{chatId}`
+- `POST /api/chats/{chatId}/messages`
+- `GET /api/chats/{chatId}/messages`
 - `GET /api/chats/{chatId}/messages/by-day?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=Asia/Almaty`
-- `PATCH /api/chats/{chatId}/project` - move chat to project
-- `DELETE /api/chats/{chatId}/project` - remove chat from project
+- `PATCH /api/chats/{chatId}/project`
+- `DELETE /api/chats/{chatId}/project`
+- `POST /api/chats/{chatId}/generate`
+- `POST /api/chats/{chatId}/generate/stream` (`text/event-stream`)
 
 Allowed message `role` values:
 
@@ -116,12 +134,27 @@ Allowed message `role` values:
 - `USER`
 - `ASSISTANT`
 
+Generate payload example:
+
+```json
+{
+  "prompt": "Explain what JPA entity is in simple words",
+  "systemPrompt": "Answer shortly and clearly."
+}
+```
+
+Notes:
+
+- If `prompt` is passed, it is stored as a new `USER` message before generation.
+- Assistant reply is stored as `ASSISTANT`.
+- Context is built from chat history with max message and char limits.
+
 ### Projects
 
-- `POST /api/projects` - create project
-- `GET /api/projects` - list projects
-- `POST /api/projects/{projectId}/chats` - create chat in project
-- `GET /api/projects/{projectId}/chats` - list project chats
+- `POST /api/projects`
+- `GET /api/projects`
+- `POST /api/projects/{projectId}/chats`
+- `GET /api/projects/{projectId}/chats`
 
 ## Validation and Errors
 

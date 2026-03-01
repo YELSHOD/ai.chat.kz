@@ -3,8 +3,10 @@ package com.yelshod.ai.chat.kz.chat;
 import com.yelshod.ai.chat.kz.auth.AppPrincipal;
 import com.yelshod.ai.chat.kz.chat.dto.*;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -81,5 +83,23 @@ public class ChatController {
     public ChatResponse removeChatFromProject(@AuthenticationPrincipal AppPrincipal principal,
                                               @PathVariable UUID chatId){
         return chatService.removeChatFromProject(principal.userId(), chatId);
+    }
+
+    @PostMapping("/{chatId}/generate")
+    public MessageResponse generateAssistantMessage(@AuthenticationPrincipal AppPrincipal principal,
+                                                    @PathVariable UUID chatId,
+                                                    @Valid @RequestBody(required = false) GenerateChatRequest request) {
+        GenerateChatRequest actual = request == null ? new GenerateChatRequest(null, null) : request;
+        return chatService.generateAssistantMessage(principal.userId(), chatId, actual);
+    }
+
+    @PostMapping(path = "/{chatId}/generate/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter generateAssistantMessageStream(@AuthenticationPrincipal AppPrincipal principal,
+                                                     @PathVariable UUID chatId,
+                                                     @Valid @RequestBody(required = false) GenerateChatRequest request) {
+        GenerateChatRequest actual = request == null ? new GenerateChatRequest(null, null) : request;
+        SseEmitter emitter = new SseEmitter(0L);
+        chatService.generateAssistantMessageStream(principal.userId(), chatId, actual, emitter);
+        return emitter;
     }
 }

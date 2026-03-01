@@ -1,14 +1,18 @@
 package com.yelshod.ai.chat.kz.chat;
 
+import com.yelshod.ai.chat.kz.ai.GeminiClient;
 import com.yelshod.ai.chat.kz.chat.dto.*;
 import com.yelshod.ai.chat.kz.common.ApiException;
 import com.yelshod.ai.chat.kz.project.Project;
 import com.yelshod.ai.chat.kz.project.ProjectRepository;
 import com.yelshod.ai.chat.kz.user.AppUser;
 import com.yelshod.ai.chat.kz.user.AppUserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -17,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -26,15 +31,24 @@ public class ChatService {
     private final ChatRepository chatRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final ProjectRepository projectRepository;
+    private final GeminiClient geminiClient;
+    private final int contextMaxMessages;
+    private final int contextMaxChars;
 
     public ChatService(AppUserRepository appUserRepository,
                        ChatRepository chatRepository,
                        ChatMessageRepository chatMessageRepository,
-                       ProjectRepository projectRepository) {
+                       ProjectRepository projectRepository,
+                       GeminiClient geminiClient,
+                       @Value("${ai.context.max-messages:30}") int contextMaxMessages,
+                       @Value("${ai.context.max-chars:12000}") int contextMaxChars) {
         this.appUserRepository = appUserRepository;
         this.chatRepository = chatRepository;
         this.chatMessageRepository = chatMessageRepository;
         this.projectRepository = projectRepository;
+        this.geminiClient = geminiClient;
+        this.contextMaxMessages = contextMaxMessages;
+        this.contextMaxChars = contextMaxChars;
     }
 
     @Transactional
@@ -92,17 +106,7 @@ public class ChatService {
         AppUser user = findUser(userId);
         Chat chat = findChat(user, chatPublicId);
 
-        ChatMessage message = new ChatMessage();
-        message.setPublicId(UUID.randomUUID());
-        message.setChat(chat);
-        message.setRole(request.role());
-        message.setContent(request.content().trim());
-        message.setCreatedAt(Instant.now());
-
-        ChatMessage saved = chatMessageRepository.save(message);
-        chat.setUpdatedAt(Instant.now());
-        chatRepository.save(chat);
-
+        ChatMessage saved = saveChatMessage(chat, request.role(), request.content().trim());
         return toMessageResponse(saved);
     }
 
@@ -203,6 +207,48 @@ public class ChatService {
         return toChatResponse(saved);
     }
 
+    @Transactional
+    public MessageResponse generateAssistantMessage(Long userId, UUID chatPublicId, GenerateChatRequest request) {
+        GenerationContext context = prepareGenerationContext(userId, chatPublicId, request);
+        String generated = geminiClient.generateContent(context.turns(), context.systemInstruction());
+        return persistAssistantMessage(userId, chatPublicId, generated);
+    }
+
+    public void generateAssistantMessageStream(Long userId,
+                                               UUID chatPublicId,
+                                               GenerateChatRequest request,
+                                               SseEmitter emitter) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                GenerationContext context = prepareGenerationContext(userId, chatPublicId, request);
+                emitter.send(SseEmitter.event().name("start").data(Map.of("chatId", chatPublicId.toString())));
+
+                String generated = geminiClient.streamGenerateContent(context.turns(), context.systemInstruction(), delta -> {
+                    try {
+                        emitter.send(SseEmitter.event().name("delta").data(delta));
+                    } catch (Exception sendException) {
+                        throw new RuntimeException(sendException);
+                    }
+                });
+
+                if (!StringUtils.hasText(generated)) {
+                    generated = geminiClient.generateContent(context.turns(), context.systemInstruction());
+                }
+
+                MessageResponse saved = persistAssistantMessage(userId, chatPublicId, generated);
+                emitter.send(SseEmitter.event().name("done").data(saved));
+                emitter.complete();
+            } catch (Exception exception) {
+                try {
+                    emitter.send(SseEmitter.event().name("error").data("Generation failed"));
+                } catch (Exception ignored) {
+                    // No-op: emitter may already be closed by client.
+                }
+                emitter.completeWithError(exception);
+            }
+        });
+    }
+
     private AppUser findUser(Long userId) {
         return appUserRepository.findById(userId)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "User not found"));
@@ -219,5 +265,110 @@ public class ChatService {
 
     private MessageResponse toMessageResponse(ChatMessage message) {
         return new MessageResponse(message.getPublicId(), message.getRole(), message.getContent(), message.getCreatedAt());
+    }
+
+    private GenerationContext prepareGenerationContext(Long userId, UUID chatPublicId, GenerateChatRequest request) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+
+        if (request != null && StringUtils.hasText(request.prompt())) {
+            saveChatMessage(chat, MessageRole.USER, request.prompt().trim());
+        }
+
+        List<ChatMessage> allMessages = chatMessageRepository.findAllByChatOrderByCreatedAtAsc(chat);
+        if (allMessages.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Chat has no messages");
+        }
+
+        StringBuilder systemBuilder = new StringBuilder();
+        if (request != null && StringUtils.hasText(request.systemPrompt())) {
+            systemBuilder.append(request.systemPrompt().trim());
+        }
+
+        int maxMessages = Math.max(1, contextMaxMessages);
+        int maxChars = Math.max(2000, contextMaxChars);
+        List<ChatMessage> selected = selectMessagesWithinLimits(allMessages, maxMessages, maxChars);
+
+        List<GeminiClient.Turn> turns = selected.stream()
+                .map(message -> toTurnOrSystem(message, systemBuilder))
+                .filter(turn -> turn != null)
+                .toList();
+
+        if (turns.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Chat has no user/assistant messages for generation");
+        }
+
+        return new GenerationContext(turns, systemBuilder.toString().trim());
+    }
+
+    private List<ChatMessage> selectMessagesWithinLimits(List<ChatMessage> messages, int maxMessages, int maxChars) {
+        List<ChatMessage> selected = new java.util.ArrayList<>();
+        int usedChars = 0;
+
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ChatMessage message = messages.get(i);
+            String content = message.getContent() == null ? "" : message.getContent().trim();
+            if (content.isEmpty()) {
+                continue;
+            }
+
+            int nextChars = usedChars + content.length();
+            if (!selected.isEmpty() && (selected.size() >= maxMessages || nextChars > maxChars)) {
+                break;
+            }
+
+            selected.add(message);
+            usedChars = nextChars;
+        }
+
+        java.util.Collections.reverse(selected);
+        return selected;
+    }
+
+    private GeminiClient.Turn toTurnOrSystem(ChatMessage message, StringBuilder systemBuilder) {
+        String content = message.getContent() == null ? "" : message.getContent().trim();
+        if (content.isEmpty()) {
+            return null;
+        }
+
+        if (message.getRole() == MessageRole.SYSTEM) {
+            if (!systemBuilder.isEmpty()) {
+                systemBuilder.append("\n\n");
+            }
+            systemBuilder.append(content);
+            return null;
+        }
+
+        String geminiRole = message.getRole() == MessageRole.ASSISTANT ? "model" : "user";
+        return new GeminiClient.Turn(geminiRole, content);
+    }
+
+    @Transactional
+    public MessageResponse persistAssistantMessage(Long userId, UUID chatPublicId, String content) {
+        if (!StringUtils.hasText(content)) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Model returned empty content");
+        }
+
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+        ChatMessage saved = saveChatMessage(chat, MessageRole.ASSISTANT, content.trim());
+        return toMessageResponse(saved);
+    }
+
+    private ChatMessage saveChatMessage(Chat chat, MessageRole role, String content) {
+        ChatMessage message = new ChatMessage();
+        message.setPublicId(UUID.randomUUID());
+        message.setChat(chat);
+        message.setRole(role);
+        message.setContent(content);
+        message.setCreatedAt(Instant.now());
+
+        ChatMessage saved = chatMessageRepository.save(message);
+        chat.setUpdatedAt(Instant.now());
+        chatRepository.save(chat);
+        return saved;
+    }
+
+    private record GenerationContext(List<GeminiClient.Turn> turns, String systemInstruction) {
     }
 }
