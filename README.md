@@ -59,6 +59,8 @@ CREATE DATABASE "ai.chat.kz";
 - `GEMINI_TEMPERATURE` (optional)
 - `AI_CONTEXT_MAX_MESSAGES` (optional)
 - `AI_CONTEXT_MAX_CHARS` (optional)
+- `JWT_SECRET` (base64 string)
+- `JWT_ACCESS_TOKEN_MINUTES` (optional)
 
 PowerShell example:
 
@@ -104,7 +106,13 @@ On Windows use `.\gradlew.bat` instead of `./gradlew`.
 Authorization: Bearer <token>
 ```
 
-Token is issued on `register/login` and is valid for 30 days.
+Tokens are issued on `register/login`.
+`register/login` returns:
+
+- `accessToken` (JWT, short-lived)
+- `refreshToken` (stored in DB, long-lived)
+- `accessTokenExpiresAt`
+- `refreshTokenExpiresAt`
 
 ## Main Endpoints
 
@@ -112,6 +120,7 @@ Token is issued on `register/login` and is valid for 30 days.
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `POST /api/auth/refresh`
 - `GET /api/auth/me`
 
 ### Chats
@@ -126,6 +135,7 @@ Token is issued on `register/login` and is valid for 30 days.
 - `PATCH /api/chats/{chatId}/project`
 - `DELETE /api/chats/{chatId}/project`
 - `POST /api/chats/{chatId}/generate`
+- `POST /api/chats/{chatId}/regenerate`
 - `POST /api/chats/{chatId}/generate/stream` (`text/event-stream`)
 
 Allowed message `role` values:
@@ -148,6 +158,7 @@ Notes:
 - If `prompt` is passed, it is stored as a new `USER` message before generation.
 - Assistant reply is stored as `ASSISTANT`.
 - Context is built from chat history with max message and char limits.
+- `regenerate` removes the last assistant message (if present) and generates a new one from existing context.
 
 ### Projects
 
