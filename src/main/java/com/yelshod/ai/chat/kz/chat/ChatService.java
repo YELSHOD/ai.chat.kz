@@ -363,8 +363,8 @@ public class ChatService {
             return null;
         }
 
-        String geminiRole = message.getRole() == MessageRole.ASSISTANT ? "model" : "user";
-        return new GeminiClient.Turn(geminiRole, content);
+        String aiRole = message.getRole() == MessageRole.ASSISTANT ? "assistant" : "user";
+        return new GeminiClient.Turn(aiRole, content);
     }
 
     @Transactional

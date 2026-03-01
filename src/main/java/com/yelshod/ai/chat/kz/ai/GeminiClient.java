@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -20,7 +21,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -34,19 +34,21 @@ public class GeminiClient {
     private final String apiKey;
     private final String model;
     private final double temperature;
+    private final String baseUrl;
 
     public GeminiClient(
-            ObjectMapper objectMapper,
-            @Value("${ai.gemini.api-key:}") String apiKey,
-            @Value("${ai.gemini.model:gemini-2.0-flash}") String model,
-            @Value("${ai.gemini.temperature:0.7}") double temperature
+            @Value("${ai.api-key:${ai.gemini.api-key:}}") String apiKey,
+            @Value("${ai.model:${ai.gemini.model:openai/gpt-5-mini}}") String model,
+            @Value("${ai.temperature:${ai.gemini.temperature:0.7}}") double temperature,
+            @Value("${ai.base-url:https://zenmux.ai/api/v1}") String baseUrl
     ) {
-        this.objectMapper = objectMapper;
+        this.objectMapper = new ObjectMapper();
         this.apiKey = apiKey;
         this.model = model;
         this.temperature = temperature;
+        this.baseUrl = baseUrl;
         this.restClient = RestClient.builder()
-                .baseUrl("https://generativelanguage.googleapis.com")
+                .baseUrl(baseUrl)
                 .build();
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
@@ -57,10 +59,8 @@ public class GeminiClient {
         ensureConfigured();
         try {
             String raw = restClient.post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/v1beta/models/{model}:generateContent")
-                            .queryParam("key", apiKey)
-                            .build(model))
+                    .uri("/chat/completions")
+                    .header("Authorization", "Bearer " + apiKey)
                     .body(buildRequestBody(turns, systemInstruction))
                     .retrieve()
                     .body(String.class);
@@ -72,21 +72,25 @@ public class GeminiClient {
             return text.trim();
         } catch (ApiException exception) {
             throw exception;
+        } catch (RestClientResponseException exception) {
+            String details = extractErrorMessage(exception.getResponseBodyAsString());
+            if (!StringUtils.hasText(details)) {
+                details = "status=" + exception.getStatusCode().value();
+            }
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "AI request failed: " + details);
         } catch (RestClientException exception) {
-            throw new ApiException(HttpStatus.BAD_GATEWAY, "Gemini request failed");
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "AI request failed");
         }
     }
 
     public String streamGenerateContent(List<Turn> turns, String systemInstruction, Consumer<String> onDelta) {
         ensureConfigured();
         try {
-            URI uri = URI.create("https://generativelanguage.googleapis.com/v1beta/models/"
-                    + model
-                    + ":streamGenerateContent?alt=sse&key="
-                    + apiKey);
+            URI uri = URI.create(baseUrl + "/chat/completions");
 
-            String payload = objectMapper.writeValueAsString(buildRequestBody(turns, systemInstruction));
+            String payload = objectMapper.writeValueAsString(buildStreamRequestBody(turns, systemInstruction));
             HttpRequest request = HttpRequest.newBuilder(uri)
+                    .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(60))
                     .POST(HttpRequest.BodyPublishers.ofString(payload))
@@ -94,11 +98,12 @@ public class GeminiClient {
 
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() >= 400) {
-                throw new ApiException(HttpStatus.BAD_GATEWAY, "Gemini streaming request failed");
+                String errorRaw = readResponseBody(response.body());
+                String details = extractErrorMessage(errorRaw);
+                throw new ApiException(HttpStatus.BAD_GATEWAY, "AI streaming request failed: " + (details.isEmpty() ? "status=" + response.statusCode() : details));
             }
 
             StringBuilder aggregated = new StringBuilder();
-            String emitted = "";
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -111,23 +116,13 @@ public class GeminiClient {
                         continue;
                     }
 
-                    String text = extractText(data);
+                    String text = extractStreamDeltaText(data);
                     if (!StringUtils.hasText(text)) {
                         continue;
                     }
 
-                    if (text.startsWith(emitted)) {
-                        String delta = text.substring(emitted.length());
-                        if (!delta.isEmpty()) {
-                            onDelta.accept(delta);
-                            aggregated.append(delta);
-                            emitted = text;
-                        }
-                    } else {
-                        onDelta.accept(text);
-                        aggregated.append(text);
-                        emitted = emitted + text;
-                    }
+                    onDelta.accept(text);
+                    aggregated.append(text);
                 }
             }
 
@@ -135,51 +130,87 @@ public class GeminiClient {
         } catch (ApiException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new ApiException(HttpStatus.BAD_GATEWAY, "Gemini streaming failed");
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "AI streaming failed");
         }
     }
 
     private Object buildRequestBody(List<Turn> turns, String systemInstruction) {
-        List<Map<String, Object>> contents = new ArrayList<>();
-        for (Turn turn : turns) {
-            contents.add(Map.of(
-                    "role", turn.role(),
-                    "parts", List.of(Map.of("text", turn.text()))
+        List<Map<String, Object>> messages = buildMessages(turns, systemInstruction);
+        return Map.of(
+                "model", model,
+                "messages", messages,
+                "temperature", temperature
+        );
+    }
+
+    private Object buildStreamRequestBody(List<Turn> turns, String systemInstruction) {
+        List<Map<String, Object>> messages = buildMessages(turns, systemInstruction);
+        return Map.of(
+                "model", model,
+                "messages", messages,
+                "temperature", temperature,
+                "stream", true
+        );
+    }
+
+    private List<Map<String, Object>> buildMessages(List<Turn> turns, String systemInstruction) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+        if (StringUtils.hasText(systemInstruction)) {
+            messages.add(Map.of(
+                    "role", "system",
+                    "content", systemInstruction
             ));
         }
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("contents", contents);
-        body.put("generationConfig", Map.of("temperature", temperature));
-
-        if (StringUtils.hasText(systemInstruction)) {
-            body.put("systemInstruction", Map.of("parts", List.of(Map.of("text", systemInstruction))));
+        for (Turn turn : turns) {
+            messages.add(Map.of(
+                    "role", turn.role(),
+                    "content", turn.text()
+            ));
         }
-
-        return body;
+        return messages;
     }
 
     private String extractText(String rawJson) {
         try {
             JsonNode root = objectMapper.readTree(rawJson);
-            JsonNode candidates = root.path("candidates");
-            if (!candidates.isArray() || candidates.isEmpty()) {
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
                 return "";
             }
+            return choices.get(0).path("message").path("content").asText("");
+        } catch (Exception exception) {
+            return "";
+        }
+    }
 
-            JsonNode parts = candidates.get(0).path("content").path("parts");
-            if (!parts.isArray() || parts.isEmpty()) {
+    private String extractErrorMessage(String rawJson) {
+        try {
+            JsonNode root = objectMapper.readTree(rawJson);
+            String message = root.path("error").path("message").asText("");
+            return message == null ? "" : message.trim();
+        } catch (Exception exception) {
+            return "";
+        }
+    }
+
+    private String extractStreamDeltaText(String rawJson) {
+        try {
+            JsonNode root = objectMapper.readTree(rawJson);
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
                 return "";
             }
+            JsonNode delta = choices.get(0).path("delta");
+            return delta.path("content").asText("");
+        } catch (Exception exception) {
+            return "";
+        }
+    }
 
-            StringBuilder builder = new StringBuilder();
-            for (JsonNode part : parts) {
-                String text = part.path("text").asText("");
-                if (!text.isEmpty()) {
-                    builder.append(text);
-                }
-            }
-            return builder.toString();
+    private String readResponseBody(InputStream inputStream) {
+        try {
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
         } catch (Exception exception) {
             return "";
         }
@@ -187,7 +218,7 @@ public class GeminiClient {
 
     private void ensureConfigured() {
         if (!StringUtils.hasText(apiKey)) {
-            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "GEMINI_API_KEY is not configured");
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "AI API key is not configured");
         }
     }
 
