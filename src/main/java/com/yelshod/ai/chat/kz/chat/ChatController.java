@@ -93,6 +93,14 @@ public class ChatController {
         return chatService.generateAssistantMessage(principal.userId(), chatId, actual);
     }
 
+    @PostMapping("/{chatId}/regenerate")
+    public MessageResponse regenerateAssistantMessage(@AuthenticationPrincipal AppPrincipal principal,
+                                                      @PathVariable UUID chatId,
+                                                      @Valid @RequestBody(required = false) GenerateChatRequest request) {
+        GenerateChatRequest actual = request == null ? new GenerateChatRequest(null, null) : request;
+        return chatService.regenerateAssistantMessage(principal.userId(), chatId, actual);
+    }
+
     @PostMapping(path = "/{chatId}/generate/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter generateAssistantMessageStream(@AuthenticationPrincipal AppPrincipal principal,
                                                      @PathVariable UUID chatId,

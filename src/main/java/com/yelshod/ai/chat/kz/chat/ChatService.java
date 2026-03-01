@@ -209,7 +209,28 @@ public class ChatService {
 
     @Transactional
     public MessageResponse generateAssistantMessage(Long userId, UUID chatPublicId, GenerateChatRequest request) {
-        GenerationContext context = prepareGenerationContext(userId, chatPublicId, request);
+        GenerationContext context = prepareGenerationContext(userId, chatPublicId, request, true);
+        String generated = geminiClient.generateContent(context.turns(), context.systemInstruction());
+        return persistAssistantMessage(userId, chatPublicId, generated);
+    }
+
+    @Transactional
+    public MessageResponse regenerateAssistantMessage(Long userId, UUID chatPublicId, GenerateChatRequest request) {
+        AppUser user = findUser(userId);
+        Chat chat = findChat(user, chatPublicId);
+        List<ChatMessage> messages = chatMessageRepository.findAllByChatOrderByCreatedAtAsc(chat);
+        if (messages.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Chat has no messages");
+        }
+
+        ChatMessage last = messages.get(messages.size() - 1);
+        if (last.getRole() == MessageRole.ASSISTANT) {
+            chatMessageRepository.delete(last);
+            chat.setUpdatedAt(Instant.now());
+            chatRepository.save(chat);
+        }
+
+        GenerationContext context = prepareGenerationContext(userId, chatPublicId, request, false);
         String generated = geminiClient.generateContent(context.turns(), context.systemInstruction());
         return persistAssistantMessage(userId, chatPublicId, generated);
     }
@@ -220,7 +241,7 @@ public class ChatService {
                                                SseEmitter emitter) {
         CompletableFuture.runAsync(() -> {
             try {
-                GenerationContext context = prepareGenerationContext(userId, chatPublicId, request);
+                GenerationContext context = prepareGenerationContext(userId, chatPublicId, request, true);
                 emitter.send(SseEmitter.event().name("start").data(Map.of("chatId", chatPublicId.toString())));
 
                 String generated = geminiClient.streamGenerateContent(context.turns(), context.systemInstruction(), delta -> {
@@ -267,11 +288,14 @@ public class ChatService {
         return new MessageResponse(message.getPublicId(), message.getRole(), message.getContent(), message.getCreatedAt());
     }
 
-    private GenerationContext prepareGenerationContext(Long userId, UUID chatPublicId, GenerateChatRequest request) {
+    private GenerationContext prepareGenerationContext(Long userId,
+                                                       UUID chatPublicId,
+                                                       GenerateChatRequest request,
+                                                       boolean appendPrompt) {
         AppUser user = findUser(userId);
         Chat chat = findChat(user, chatPublicId);
 
-        if (request != null && StringUtils.hasText(request.prompt())) {
+        if (appendPrompt && request != null && StringUtils.hasText(request.prompt())) {
             saveChatMessage(chat, MessageRole.USER, request.prompt().trim());
         }
 
@@ -364,9 +388,32 @@ public class ChatService {
         message.setCreatedAt(Instant.now());
 
         ChatMessage saved = chatMessageRepository.save(message);
+        maybeAutoTitle(chat, role, content);
         chat.setUpdatedAt(Instant.now());
         chatRepository.save(chat);
         return saved;
+    }
+
+    private void maybeAutoTitle(Chat chat, MessageRole role, String content) {
+        if (role != MessageRole.USER) {
+            return;
+        }
+        if (!"New chat".equals(chat.getTitle())) {
+            return;
+        }
+
+        String compact = content.replaceAll("\\s+", " ").trim();
+        if (!StringUtils.hasText(compact)) {
+            return;
+        }
+
+        int maxLen = 60;
+        if (compact.length() <= maxLen) {
+            chat.setTitle(compact);
+            return;
+        }
+
+        chat.setTitle(compact.substring(0, maxLen - 3).trim() + "...");
     }
 
     private record GenerationContext(List<GeminiClient.Turn> turns, String systemInstruction) {
