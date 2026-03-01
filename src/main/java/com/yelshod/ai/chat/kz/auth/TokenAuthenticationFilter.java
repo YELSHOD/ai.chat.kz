@@ -1,6 +1,5 @@
 package com.yelshod.ai.chat.kz.auth;
 
-import com.yelshod.ai.chat.kz.user.AppUser;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,10 +30,9 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             String token = header.substring(7).trim();
-            Optional<AppUser> userOpt = tokenAuthService.resolveUser(token);
-            if (userOpt.isPresent()) {
-                AppUser user = userOpt.get();
-                AppPrincipal principal = new AppPrincipal(user.getId(), user.getEmail());
+            Optional<AppPrincipal> principalOpt = tokenAuthService.resolvePrincipal(token);
+            if (principalOpt.isPresent()) {
+                AppPrincipal principal = principalOpt.get();
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         principal,
                         token,

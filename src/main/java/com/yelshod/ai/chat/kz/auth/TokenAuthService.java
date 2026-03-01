@@ -1,22 +1,24 @@
 package com.yelshod.ai.chat.kz.auth;
 
-import com.yelshod.ai.chat.kz.user.AppUser;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.Optional;
 
 @Service
 public class TokenAuthService {
 
-    private final AuthTokenRepository authTokenRepository;
+    private final JwtService jwtService;
 
-    public TokenAuthService(AuthTokenRepository authTokenRepository) {
-        this.authTokenRepository = authTokenRepository;
+    public TokenAuthService(JwtService jwtService) {
+        this.jwtService = jwtService;
     }
 
-    public Optional<AppUser> resolveUser(String token) {
-        return authTokenRepository.findByTokenAndExpiresAtAfter(token, Instant.now())
-                .map(AuthToken::getUser);
+    public Optional<AppPrincipal> resolvePrincipal(String token) {
+        try {
+            JwtService.JwtPayload payload = jwtService.parseAndValidate(token);
+            return Optional.of(new AppPrincipal(payload.userId(), payload.email()));
+        } catch (Exception exception) {
+            return Optional.empty();
+        }
     }
 }

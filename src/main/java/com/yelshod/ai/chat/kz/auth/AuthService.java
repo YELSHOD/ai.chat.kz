@@ -3,6 +3,7 @@ package com.yelshod.ai.chat.kz.auth;
 import com.yelshod.ai.chat.kz.auth.dto.AuthResponse;
 import com.yelshod.ai.chat.kz.auth.dto.LoginRequest;
 import com.yelshod.ai.chat.kz.auth.dto.MeResponse;
+import com.yelshod.ai.chat.kz.auth.dto.RefreshTokenRequest;
 import com.yelshod.ai.chat.kz.auth.dto.RegisterRequest;
 import com.yelshod.ai.chat.kz.common.ApiException;
 import com.yelshod.ai.chat.kz.user.AppUser;
@@ -22,13 +23,16 @@ public class AuthService {
     private final AppUserRepository appUserRepository;
     private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
 
     public AuthService(AppUserRepository appUserRepository,
                        AuthTokenRepository authTokenRepository,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       JwtService jwtService) {
         this.appUserRepository = appUserRepository;
         this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
     }
 
     @Transactional
@@ -61,20 +65,36 @@ public class AuthService {
         return issueToken(user);
     }
 
+    @Transactional
+    public AuthResponse refresh(RefreshTokenRequest request) {
+        String refreshToken = request.refreshToken().trim();
+        AuthToken existing = authTokenRepository.findByTokenAndExpiresAtAfter(refreshToken, Instant.now())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token"));
+
+        AppUser user = existing.getUser();
+        authTokenRepository.delete(existing);
+        return issueToken(user);
+    }
+
     private AuthResponse issueToken(AppUser user) {
         Instant now = Instant.now();
-        Instant expiresAt = now.plus(30, ChronoUnit.DAYS);
+        Instant refreshExpiresAt = now.plus(30, ChronoUnit.DAYS);
+        String refreshToken = UUID.randomUUID().toString() + UUID.randomUUID();
 
         AuthToken authToken = new AuthToken();
-        authToken.setToken(UUID.randomUUID().toString() + UUID.randomUUID());
+        authToken.setToken(refreshToken);
         authToken.setUser(user);
         authToken.setCreatedAt(now);
-        authToken.setExpiresAt(expiresAt);
+        authToken.setExpiresAt(refreshExpiresAt);
         authTokenRepository.save(authToken);
 
+        JwtService.JwtPayload accessPayload = jwtService.issueAccessToken(user.getId(), user.getEmail());
+
         return new AuthResponse(
-                authToken.getToken(),
-                expiresAt,
+                accessPayload.token(),
+                accessPayload.expiresAt(),
+                refreshToken,
+                refreshExpiresAt,
                 user.getId(),
                 user.getEmail(),
                 user.getUsername()
