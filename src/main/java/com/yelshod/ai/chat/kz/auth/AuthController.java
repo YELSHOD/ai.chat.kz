@@ -18,9 +18,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final CurrentUserResolver currentUserResolver;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, CurrentUserResolver currentUserResolver) {
         this.authService = authService;
+        this.currentUserResolver = currentUserResolver;
     }
 
     @PostMapping("/register")
@@ -40,6 +42,7 @@ public class AuthController {
 
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal AppPrincipal principal) {
-        return authService.me(principal.userId());
+        Long userId = currentUserResolver.resolveUserId(principal);
+        return authService.me(userId);
     }
 }

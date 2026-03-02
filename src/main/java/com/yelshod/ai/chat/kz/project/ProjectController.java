@@ -1,6 +1,7 @@
 package com.yelshod.ai.chat.kz.project;
 
 import com.yelshod.ai.chat.kz.auth.AppPrincipal;
+import com.yelshod.ai.chat.kz.auth.CurrentUserResolver;
 import com.yelshod.ai.chat.kz.chat.ChatService;
 import com.yelshod.ai.chat.kz.chat.dto.ChatResponse;
 import com.yelshod.ai.chat.kz.chat.dto.CreateChatRequest;
@@ -19,34 +20,42 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final ChatService chatService;
+    private final CurrentUserResolver currentUserResolver;
 
-    public ProjectController(ProjectService projectService, ChatService chatService) {
+    public ProjectController(ProjectService projectService,
+                             ChatService chatService,
+                             CurrentUserResolver currentUserResolver) {
         this.projectService = projectService;
         this.chatService = chatService;
+        this.currentUserResolver = currentUserResolver;
     }
 
     @PostMapping
     public ProjectResponse create(@AuthenticationPrincipal AppPrincipal principal,
                                   @Valid @RequestBody CreateProjectRequest request) {
-        return projectService.create(principal.userId(), request);
+        Long userId = currentUserResolver.resolveUserId(principal);
+        return projectService.create(userId, request);
     }
 
     @GetMapping
     public List<ProjectResponse> list(@AuthenticationPrincipal AppPrincipal principal) {
-        return projectService.list(principal.userId());
+        Long userId = currentUserResolver.resolveUserId(principal);
+        return projectService.list(userId);
     }
 
     @PostMapping("/{projectId}/chats")
     public ChatResponse createChatInProject(@AuthenticationPrincipal AppPrincipal principal,
                                             @PathVariable UUID projectId,
                                             @Valid @RequestBody(required = false) CreateChatRequest request) {
+        Long userId = currentUserResolver.resolveUserId(principal);
         CreateChatRequest actual = request == null ? new CreateChatRequest(null) : request;
-        return chatService.createChatInProject(principal.userId(), projectId, actual);
+        return chatService.createChatInProject(userId, projectId, actual);
     }
 
     @GetMapping("/{projectId}/chats")
     public List<ChatResponse> listChatsByProject(@AuthenticationPrincipal AppPrincipal principal,
                                                  @PathVariable UUID projectId) {
-        return chatService.listChatsByProject(principal.userId(), projectId);
+        Long userId = currentUserResolver.resolveUserId(principal);
+        return chatService.listChatsByProject(userId, projectId);
     }
 }
