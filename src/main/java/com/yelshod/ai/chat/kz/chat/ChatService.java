@@ -148,6 +148,13 @@ public class ChatService {
             LocalDate to,
             ZoneId zoneId
     ) {
+        if (from == null || to == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "from and to are required", "INVALID_DATE_RANGE");
+        }
+        if (from.isAfter(to)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "from must be less than or equal to to", "INVALID_DATE_RANGE");
+        }
+
         AppUser user = findUser(userId);
         Chat chat = findChat(user, chatPublicId);
 
@@ -246,7 +253,7 @@ public class ChatService {
 
                 String generated = geminiClient.streamGenerateContent(context.turns(), context.systemInstruction(), delta -> {
                     try {
-                        emitter.send(SseEmitter.event().name("delta").data(delta));
+                        emitDeltaInChunks(emitter, delta);
                     } catch (Exception sendException) {
                         throw new RuntimeException(sendException);
                     }
@@ -417,5 +424,18 @@ public class ChatService {
     }
 
     private record GenerationContext(List<GeminiClient.Turn> turns, String systemInstruction) {
+    }
+
+    private void emitDeltaInChunks(SseEmitter emitter, String delta) throws Exception {
+        if (!StringUtils.hasText(delta)) {
+            return;
+        }
+
+        final int chunkSize = 18;
+        for (int i = 0; i < delta.length(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, delta.length());
+            String part = delta.substring(i, end);
+            emitter.send(SseEmitter.event().name("delta").data(part));
+        }
     }
 }
