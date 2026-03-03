@@ -66,10 +66,18 @@ CREATE DATABASE "ai.chat.kz";
 - `APP_AUTH_OAUTH2_REDIRECT_SUCCESS_URI` (optional, default: `http://localhost:5173/auth/callback`)
 - `APP_AUTH_PASSWORD_RESET_TTL_MINUTES` (optional, default: `30`)
 - `APP_AUTH_PASSWORD_RESET_EXPOSE_TOKEN` (optional, default: `false`, enable only for local/dev)
+- `APP_AUTH_EMAIL_VERIFICATION_TTL_MINUTES` (optional, default: `1440`)
+- `APP_AUTH_EMAIL_VERIFICATION_EXPOSE_TOKEN` (optional, default: `false`, enable only for local/dev)
+- `APP_AUTH_EMAIL_VERIFICATION_CONFIRM_URL` (optional, default: `http://localhost:5173/verify-email`)
+- `APP_MAIL_FROM` (optional, default: `no-reply@ai.chat.kz`)
 - `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID`
 - `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET`
 - `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_ID`
 - `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_SECRET`
+- `SPRING_MAIL_HOST`
+- `SPRING_MAIL_PORT`
+- `SPRING_MAIL_USERNAME`
+- `SPRING_MAIL_PASSWORD`
 
 PowerShell example:
 
@@ -115,8 +123,12 @@ On Windows use `.\gradlew.bat` instead of `./gradlew`.
 Authorization: Bearer <token>
 ```
 
-Tokens are issued on `register/login`.
-`register/login` returns:
+Tokens are issued on:
+- `login`
+- `verify-email`
+- `oauth2 login callback`
+
+`login/verify-email` returns:
 
 - `accessToken` (JWT, short-lived)
 - `refreshToken` (stored in DB, long-lived)
@@ -130,11 +142,15 @@ Tokens are issued on `register/login`.
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/refresh`
+- `POST /api/auth/verify-email`
+- `POST /api/auth/resend-verification`
 - `POST /api/auth/forgot-password`
 - `POST /api/auth/reset-password`
 - `GET /api/auth/me`
 - `GET /oauth2/authorization/google`
 - `GET /oauth2/authorization/github`
+
+`register` now creates account in unverified state and sends verification email.
 
 OAuth2 callback returns tokens in URL fragment to `APP_AUTH_OAUTH2_REDIRECT_SUCCESS_URI`:
 

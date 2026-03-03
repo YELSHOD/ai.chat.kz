@@ -1,14 +1,17 @@
 package com.yelshod.ai.chat.kz.auth;
 
 import com.yelshod.ai.chat.kz.auth.dto.AuthResponse;
+import com.yelshod.ai.chat.kz.auth.dto.EmailVerificationRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordResponse;
 import com.yelshod.ai.chat.kz.auth.dto.LoginRequest;
 import com.yelshod.ai.chat.kz.auth.dto.MessageResponse;
 import com.yelshod.ai.chat.kz.auth.dto.MeResponse;
 import com.yelshod.ai.chat.kz.auth.dto.RefreshTokenRequest;
+import com.yelshod.ai.chat.kz.auth.dto.ResendVerificationRequest;
 import com.yelshod.ai.chat.kz.auth.dto.RegisterRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ResetPasswordRequest;
+import com.yelshod.ai.chat.kz.auth.dto.VerificationChallengeResponse;
 import com.yelshod.ai.chat.kz.common.ApiException;
 import com.yelshod.ai.chat.kz.user.AppUser;
 import com.yelshod.ai.chat.kz.user.AppUserRepository;
@@ -22,6 +25,7 @@ import org.springframework.util.StringUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.net.URLEncoder;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
@@ -35,32 +39,47 @@ public class AuthService {
     private final AuthTokenRepository authTokenRepository;
     private final OAuthAccountRepository oAuthAccountRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final EmailVerificationTokenRepository emailVerificationTokenRepository;
+    private final AuthEmailService authEmailService;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final long passwordResetTtlMinutes;
     private final boolean exposePasswordResetToken;
+    private final long emailVerificationTtlMinutes;
+    private final boolean exposeEmailVerificationToken;
+    private final String emailVerificationConfirmUrl;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public AuthService(AppUserRepository appUserRepository,
                        AuthTokenRepository authTokenRepository,
                        OAuthAccountRepository oAuthAccountRepository,
                        PasswordResetTokenRepository passwordResetTokenRepository,
+                       EmailVerificationTokenRepository emailVerificationTokenRepository,
+                       AuthEmailService authEmailService,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        @Value("${app.auth.password-reset.ttl-minutes:30}") long passwordResetTtlMinutes,
-                       @Value("${app.auth.password-reset.expose-token:false}") boolean exposePasswordResetToken) {
+                       @Value("${app.auth.password-reset.expose-token:false}") boolean exposePasswordResetToken,
+                       @Value("${app.auth.email-verification.ttl-minutes:1440}") long emailVerificationTtlMinutes,
+                       @Value("${app.auth.email-verification.expose-token:false}") boolean exposeEmailVerificationToken,
+                       @Value("${app.auth.email-verification.confirm-url:http://localhost:5173/verify-email}") String emailVerificationConfirmUrl) {
         this.appUserRepository = appUserRepository;
         this.authTokenRepository = authTokenRepository;
         this.oAuthAccountRepository = oAuthAccountRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
+        this.emailVerificationTokenRepository = emailVerificationTokenRepository;
+        this.authEmailService = authEmailService;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.passwordResetTtlMinutes = passwordResetTtlMinutes;
         this.exposePasswordResetToken = exposePasswordResetToken;
+        this.emailVerificationTtlMinutes = emailVerificationTtlMinutes;
+        this.exposeEmailVerificationToken = exposeEmailVerificationToken;
+        this.emailVerificationConfirmUrl = emailVerificationConfirmUrl;
     }
 
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
+    public VerificationChallengeResponse register(RegisterRequest request) {
         String normalizedEmail = request.email().trim().toLowerCase();
         if (appUserRepository.existsByEmail(normalizedEmail)) {
             throw new ApiException(HttpStatus.CONFLICT, "Email already exists");
@@ -70,10 +89,11 @@ public class AuthService {
         user.setEmail(normalizedEmail);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setUsername(request.username().trim());
+        user.setEmailVerified(false);
+        user.setEmailVerifiedAt(null);
         user.setCreatedAt(Instant.now());
 
-        AppUser savedUser = appUserRepository.save(user);
-        return issueToken(savedUser);
+        return issueAndSendEmailVerification(appUserRepository.save(user));
     }
 
     @Transactional
@@ -84,6 +104,9 @@ public class AuthService {
 
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or password");
+        }
+        if (!user.isEmailVerified()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Email is not verified", "EMAIL_NOT_VERIFIED");
         }
 
         return issueToken(user);
@@ -113,11 +136,14 @@ public class AuthService {
                 .findByProviderAndProviderUserId(normalizedProvider, normalizedProviderUserId)
                 .orElse(null);
         if (existingOAuth != null) {
+            AppUser existingUser = existingOAuth.getUser();
+            ensureEmailVerified(existingUser, Instant.now());
             return issueToken(existingOAuth.getUser());
         }
 
         AppUser user = appUserRepository.findByEmail(normalizedEmail)
                 .orElseGet(() -> createOAuthUser(normalizedEmail, username));
+        ensureEmailVerified(user, Instant.now());
 
         OAuthAccount account = new OAuthAccount();
         account.setProvider(normalizedProvider);
@@ -127,6 +153,46 @@ public class AuthService {
         oAuthAccountRepository.save(account);
 
         return issueToken(user);
+    }
+
+    @Transactional
+    public AuthResponse verifyEmail(EmailVerificationRequest request) {
+        String token = request.token().trim();
+        if (token.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Verification token is required", "VERIFY_TOKEN_REQUIRED");
+        }
+
+        Instant now = Instant.now();
+        EmailVerificationToken verificationToken = emailVerificationTokenRepository
+                .findByTokenHashAndUsedAtIsNullAndExpiresAtAfter(sha256(token), now)
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid or expired verification token", "VERIFY_TOKEN_INVALID"));
+
+        AppUser user = verificationToken.getUser();
+        user.setEmailVerified(true);
+        user.setEmailVerifiedAt(now);
+        appUserRepository.save(user);
+
+        verificationToken.setUsedAt(now);
+        emailVerificationTokenRepository.save(verificationToken);
+        emailVerificationTokenRepository.deleteByUserIdAndUsedAtIsNull(user.getId());
+
+        return issueToken(user);
+    }
+
+    @Transactional
+    public VerificationChallengeResponse resendVerification(ResendVerificationRequest request) {
+        String normalizedEmail = normalizeEmail(request.email());
+        Optional<AppUser> userOpt = appUserRepository.findByEmail(normalizedEmail);
+        if (userOpt.isEmpty() || userOpt.get().isEmailVerified()) {
+            return new VerificationChallengeResponse(
+                    "If an unverified account exists for this email, a new verification link has been sent.",
+                    null,
+                    null,
+                    true
+            );
+        }
+
+        return issueAndSendEmailVerification(userOpt.get());
     }
 
     @Transactional
@@ -213,11 +279,14 @@ public class AuthService {
     }
 
     private AppUser createOAuthUser(String normalizedEmail, String username) {
+        Instant now = Instant.now();
         AppUser user = new AppUser();
         user.setEmail(normalizedEmail);
         user.setPasswordHash(passwordEncoder.encode(UUID.randomUUID() + UUID.randomUUID().toString()));
         user.setUsername(sanitizeUsername(username, normalizedEmail));
-        user.setCreatedAt(Instant.now());
+        user.setEmailVerified(true);
+        user.setEmailVerifiedAt(now);
+        user.setCreatedAt(now);
         return appUserRepository.save(user);
     }
 
@@ -253,6 +322,50 @@ public class AuthService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    private VerificationChallengeResponse issueAndSendEmailVerification(AppUser user) {
+        Instant now = Instant.now();
+        emailVerificationTokenRepository.deleteByUserIdAndUsedAtIsNull(user.getId());
+
+        String rawToken = generateResetToken();
+        Instant expiresAt = now.plus(emailVerificationTtlMinutes, ChronoUnit.MINUTES);
+
+        EmailVerificationToken verificationToken = new EmailVerificationToken();
+        verificationToken.setUser(user);
+        verificationToken.setTokenHash(sha256(rawToken));
+        verificationToken.setCreatedAt(now);
+        verificationToken.setExpiresAt(expiresAt);
+        emailVerificationTokenRepository.save(verificationToken);
+
+        String verificationLink = buildVerificationLink(rawToken);
+        boolean emailSent = authEmailService.sendVerificationEmail(
+                user.getEmail(),
+                user.getUsername(),
+                verificationLink,
+                expiresAt
+        );
+
+        return new VerificationChallengeResponse(
+                "Registration successful. Please verify your email to continue.",
+                expiresAt,
+                exposeEmailVerificationToken ? rawToken : null,
+                emailSent
+        );
+    }
+
+    private String buildVerificationLink(String rawToken) {
+        String separator = emailVerificationConfirmUrl.contains("?") ? "&" : "?";
+        return emailVerificationConfirmUrl + separator + "token=" + URLEncoder.encode(rawToken, StandardCharsets.UTF_8);
+    }
+
+    private void ensureEmailVerified(AppUser user, Instant now) {
+        if (user.isEmailVerified()) {
+            return;
+        }
+        user.setEmailVerified(true);
+        user.setEmailVerifiedAt(now);
+        appUserRepository.save(user);
+    }
+
     private String sha256(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -272,6 +385,6 @@ public class AuthService {
         AppUser user = appUserRepository.findById(userId)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "User not found"));
 
-        return new MeResponse(user.getId(), user.getEmail(), user.getUsername());
+        return new MeResponse(user.getId(), user.getEmail(), user.getUsername(), user.isEmailVerified());
     }
 }

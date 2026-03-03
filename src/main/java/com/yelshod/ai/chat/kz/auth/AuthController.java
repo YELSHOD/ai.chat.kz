@@ -1,14 +1,17 @@
 package com.yelshod.ai.chat.kz.auth;
 
 import com.yelshod.ai.chat.kz.auth.dto.AuthResponse;
+import com.yelshod.ai.chat.kz.auth.dto.EmailVerificationRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordResponse;
 import com.yelshod.ai.chat.kz.auth.dto.LoginRequest;
 import com.yelshod.ai.chat.kz.auth.dto.MessageResponse;
 import com.yelshod.ai.chat.kz.auth.dto.MeResponse;
 import com.yelshod.ai.chat.kz.auth.dto.RefreshTokenRequest;
+import com.yelshod.ai.chat.kz.auth.dto.ResendVerificationRequest;
 import com.yelshod.ai.chat.kz.auth.dto.RegisterRequest;
 import com.yelshod.ai.chat.kz.auth.dto.ResetPasswordRequest;
+import com.yelshod.ai.chat.kz.auth.dto.VerificationChallengeResponse;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,7 +33,7 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public AuthResponse register(@Valid @RequestBody RegisterRequest request) {
+    public VerificationChallengeResponse register(@Valid @RequestBody RegisterRequest request) {
         return authService.register(request);
     }
 
@@ -42,6 +45,16 @@ public class AuthController {
     @PostMapping("/refresh")
     public AuthResponse refresh(@Valid @RequestBody RefreshTokenRequest request) {
         return authService.refresh(request);
+    }
+
+    @PostMapping("/verify-email")
+    public AuthResponse verifyEmail(@Valid @RequestBody EmailVerificationRequest request) {
+        return authService.verifyEmail(request);
+    }
+
+    @PostMapping("/resend-verification")
+    public VerificationChallengeResponse resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
+        return authService.resendVerification(request);
     }
 
     @PostMapping("/forgot-password")

@@ -26,6 +26,12 @@ public class AppUser {
     @Column(nullable = false)
     private String username;
 
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean emailVerified;
+
+    @Column
+    private Instant emailVerifiedAt;
+
     @Column(nullable = false)
     private Instant createdAt;
 
@@ -66,5 +72,21 @@ public class AppUser {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public boolean isEmailVerified() {
+        return emailVerified;
+    }
+
+    public void setEmailVerified(boolean emailVerified) {
+        this.emailVerified = emailVerified;
+    }
+
+    public Instant getEmailVerifiedAt() {
+        return emailVerifiedAt;
+    }
+
+    public void setEmailVerifiedAt(Instant emailVerifiedAt) {
+        this.emailVerifiedAt = emailVerifiedAt;
     }
 }
