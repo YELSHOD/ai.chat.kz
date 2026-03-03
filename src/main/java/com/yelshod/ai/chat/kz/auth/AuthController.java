@@ -1,10 +1,14 @@
 package com.yelshod.ai.chat.kz.auth;
 
 import com.yelshod.ai.chat.kz.auth.dto.AuthResponse;
+import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordRequest;
+import com.yelshod.ai.chat.kz.auth.dto.ForgotPasswordResponse;
 import com.yelshod.ai.chat.kz.auth.dto.LoginRequest;
+import com.yelshod.ai.chat.kz.auth.dto.MessageResponse;
 import com.yelshod.ai.chat.kz.auth.dto.MeResponse;
 import com.yelshod.ai.chat.kz.auth.dto.RefreshTokenRequest;
 import com.yelshod.ai.chat.kz.auth.dto.RegisterRequest;
+import com.yelshod.ai.chat.kz.auth.dto.ResetPasswordRequest;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,6 +42,16 @@ public class AuthController {
     @PostMapping("/refresh")
     public AuthResponse refresh(@Valid @RequestBody RefreshTokenRequest request) {
         return authService.refresh(request);
+    }
+
+    @PostMapping("/forgot-password")
+    public ForgotPasswordResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return authService.forgotPassword(request);
+    }
+
+    @PostMapping("/reset-password")
+    public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return authService.resetPassword(request);
     }
 
     @GetMapping("/me")

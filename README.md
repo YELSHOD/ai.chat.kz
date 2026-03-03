@@ -5,6 +5,8 @@ Backend API for chats and projects built with Spring Boot.
 ## Features
 
 - User registration and login.
+- OAuth2 login (Google/GitHub).
+- Password reset via one-time token.
 - Bearer-token authentication.
 - CRUD operations for chats and messages.
 - Chat grouping by projects.
@@ -61,6 +63,13 @@ CREATE DATABASE "ai.chat.kz";
 - `AI_CONTEXT_MAX_CHARS` (optional)
 - `JWT_SECRET` (base64 string)
 - `JWT_ACCESS_TOKEN_MINUTES` (optional)
+- `APP_AUTH_OAUTH2_REDIRECT_SUCCESS_URI` (optional, default: `http://localhost:5173/auth/callback`)
+- `APP_AUTH_PASSWORD_RESET_TTL_MINUTES` (optional, default: `30`)
+- `APP_AUTH_PASSWORD_RESET_EXPOSE_TOKEN` (optional, default: `false`, enable only for local/dev)
+- `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID`
+- `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET`
+- `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_ID`
+- `SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_SECRET`
 
 PowerShell example:
 
@@ -121,7 +130,15 @@ Tokens are issued on `register/login`.
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/refresh`
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password`
 - `GET /api/auth/me`
+- `GET /oauth2/authorization/google`
+- `GET /oauth2/authorization/github`
+
+OAuth2 callback returns tokens in URL fragment to `APP_AUTH_OAUTH2_REDIRECT_SUCCESS_URI`:
+
+`#accessToken=...&refreshToken=...&userId=...`
 
 ### Chats
 
